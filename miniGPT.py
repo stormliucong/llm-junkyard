@@ -39,7 +39,7 @@ class MultiAttention(nn.Module):
 
 		# mask 
 		if mask is not None:
-			QK = QK.masked_fill(mask == 0, -1e-9)
+			QK = QK.masked_fill(mask == 0, -1e9)
 
 		# softmax
 		QK = torch.softmax(QK, dim=-1)
