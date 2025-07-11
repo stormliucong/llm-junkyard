@@ -86,24 +86,25 @@ class Decoder(nn.Module):
 		self.position = nn.Embedding(max_sequence_length, d_model)
 		self.blocks = nn.ModuleList([TransformerBlock(n_header, d_model, d_ff, dropout_rate) for _ in range(self.n_layer)])
 		self.project = nn.Linear(d_model, vocabulary_size, bias=False)
-
-		self.mask = torch.tril(torch.ones())
+        # registered as a buffer to allow it to move
+		self.register_buffer('mask', torch.tril(torch.ones(max_sequence_length, max_sequence_length)))
 
 
 	def forward(self, input_ids):
 
-		batch_size, seq_length, d_model = input_ids.size()
-
+		batch_size, seq_length = input_ids.size()
 		token_emb = self.emb(input_ids) # b,s,d
-
-		position_emb = self.emb(self.max_sequence_length, d_model).unsqueeze(0).unsqueeze(0) # 1,1,d
+		position_id = torch.arange(0, seq_length, dtype=torch.long, device=input_ids.device).unsqueeze(0).unsqueeze(0)
+		position_emb = self.position(position_id).unsqueeze(0).unsqueeze(0) # 1,1,d
 
 		x = token_emb + position_emb
+		
+        # adjust mask size
+		mask = self.mask[:seq_length,:seq_length]
 
 		for block in self.blocks:
 			x = block(x, self.mask)
 
 		# final projection
 		logits = nn.project(x) # b,s,v
-
-	return logits
+		return logits
