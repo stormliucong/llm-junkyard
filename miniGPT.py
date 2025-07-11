@@ -57,7 +57,7 @@ class FeedForward(nn.Module):
 		self.ff2 = nn.Linear(d_ff, d_model)
 
 	def forward(self, x):
-		return self.ff2(F.ReLU(self.ff1(x)))
+		return self.ff2(F.relu(self.ff1(x)))
 
 
 class TransformerBlock(nn.Module):
@@ -84,7 +84,7 @@ class Decoder(nn.Module):
 		super().__init__()
 		self.emb = nn.Embedding(vocabulary_size, d_model)
 		self.position = nn.Embedding(max_sequence_length, d_model)
-		self.blocks = nn.ModuleList([TransformerBlock(n_header, d_model, d_ff, dropout_rate) for _ in range(self.n_layer)])
+		self.blocks = nn.ModuleList([TransformerBlock(n_header, d_model, d_ff, dropout_rate) for _ in range(n_layer)])
 		self.project = nn.Linear(d_model, vocabulary_size, bias=False)
         # registered as a buffer to allow it to move
 		self.register_buffer('mask', torch.tril(torch.ones(max_sequence_length, max_sequence_length)))
@@ -94,8 +94,8 @@ class Decoder(nn.Module):
 
 		batch_size, seq_length = input_ids.size()
 		token_emb = self.emb(input_ids) # b,s,d
-		position_id = torch.arange(0, seq_length, dtype=torch.long, device=input_ids.device).unsqueeze(0).unsqueeze(0)
-		position_emb = self.position(position_id).unsqueeze(0).unsqueeze(0) # 1,1,d
+		position_id = torch.arange(0, seq_length, dtype=torch.long, device=input_ids.device).unsqueeze(0) # 1, s
+		position_emb = self.position(position_id) # 1,s,d
 
 		x = token_emb + position_emb
 		
@@ -103,8 +103,8 @@ class Decoder(nn.Module):
 		mask = self.mask[:seq_length,:seq_length]
 
 		for block in self.blocks:
-			x = block(x, self.mask)
+			x = block(x, mask)
 
 		# final projection
-		logits = nn.project(x) # b,s,v
+		logits = self.project(x) # b,s,v
 		return logits
