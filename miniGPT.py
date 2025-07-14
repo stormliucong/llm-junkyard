@@ -1,110 +1,99 @@
-import torch
+import torch 
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-
-class MultiAttention(nn.Module):
-	def __init__(self, n_header, d_model):
+class MultiHeaderAttention(nn.Module):
+	def __init__(self,d_model, n_headers):
 		super().__init__()
-		self.d_model = d_model
-		self.n_header = n_header
-
 		self.w_q = nn.Linear(d_model, d_model)
 		self.w_k = nn.Linear(d_model, d_model)
 		self.w_v = nn.Linear(d_model, d_model)
+		self.h = d_model // n_headers
+		self.n = n_headers
+		assert n_headers * self.h == d_model
+
 		self.w_o = nn.Linear(d_model, d_model)
-
-		self.h_model = self.d_model // self.n_header
-		assert self.h_model * self.n_header == self.d_model
-
+		
 
 	def forward(self, x, mask=None):
-		batch_size, seq_length, d_model = x.size()
-		n_header = self.n_header
-		h_model = self.h_model
+		b,s,d = x.size()
+		h = self.h
+		n = self.n
 
 		# linear projection
-		Q = self.w_q(x)
-		K = self.w_k(x)
-		V = self.w_v(x)
+		q = self.w_q(x)
+		k = self.w_k(x)
+		v = self.w_v(x)
 
 		# split and transpose
-		Q = Q.view(batch_size, seq_length, n_header, h_model).transpose(1,2).contiguous()
-		K = K.view(batch_size, seq_length, n_header, h_model).transpose(1,2).contiguous()
-		V = V.view(batch_size, seq_length, n_header, h_model).transpose(1,2).contiguous() # b,n,s,h
+		q = q.view(b,s,n,h).transpose(1,2) # b,n,s,h
+		k = k.view(b,s,n,h).transpose(1,2)
+		v = v.view(b,s,n,h).transpose(1,2)
 
-		# QK
-		QK = torch.matmul(Q,K.transpose(-1,-2)) / math.sqrt(h_model) # b,n,s,s
-
-		# mask 
+		# matmul, mask, softmax and qkv
+		qk = torch.matmul(q, k.transpose(-1,-2)) / math.sqrt(h) # b,n,s,s
 		if mask is not None:
-			QK = QK.masked_fill(mask == 0, -1e9)
+			qk.masked_fill_(mask == 0, -1e9)
+		qk = F.softmax(qk, dim = -1)
+		qkv = torch.matmul(qk, v) # b,n,s,h
 
-		# softmax
-		QK = torch.softmax(QK, dim=-1)
-
-		# QKV
-		QKV = torch.matmul(QK, V).transpose(1,2).contiguous().view(batch_size, seq_length, d_model) # b,s,d
-
-		# output
-		return self.w_o(QKV)
+		# transpose, view, and projection
+		qkv = qkv.transpose(1,2).contiguous().view(b,s,d)
+		return self.w_o(qkv)
 
 class FeedForward(nn.Module):
-	def __init__(self, d_model, d_ff):
+	def __init__(self, d_model, d_ff, drop_out_rate):
 		super().__init__()
-		self.ff1 = nn.Linear(d_model, d_ff)
-		self.ff2 = nn.Linear(d_ff, d_model)
-
+		self.fn1 = nn.Linear(d_model, d_ff)
+		self.dropout = nn.Dropout(drop_out_rate)
+		self.fn2 = nn.Linear(d_ff, d_model)
+		self.ln = nn.LayerNorm(d_model)
 	def forward(self, x):
-		return self.ff2(F.relu(self.ff1(x)))
-
+		residue = x
+		x = self.fn1(x)
+		x = F.relu(x)
+		x = self.drop(x)
+		x = self.fn2(x)
+		x = self.ln(x + residue)
+		return x
 
 class TransformerBlock(nn.Module):
-	def __init__(self, n_header, d_model, d_ff, dropout_rate):
+	def __init__(self,d_model, drop_out_rate, d_ff, n_headers):
 		super().__init__()
-		self.attention = MultiAttention(n_header, d_model)
-		self.ff = FeedForward(d_model, d_ff)
-		self.ln1 = nn.LayerNorm(d_model)
-		self.ln2 = nn.LayerNorm(d_model)
-		self.dropout = nn.Dropout(dropout_rate)
-
-
+		self.att = MultiHeaderAttention(d_model, n_headers)
+		self.ln = nn.LayerNorm(d_model)
+		self.ff = FeedForward(d_model,d_ff, drop_out_rate)
 	def forward(self, x, mask=None):
-		o1 = self.attention(x, mask)
-		o1 = self.ln1(x + self.dropout(o1))
-		o2 = self.ff(o1)
-		o2 = self.ln2(o1 + self.dropout(o2))
-		
-		return o2
+		residue = x
+		x = self.att(x, mask)
+		x = self.ln(x + residue)
+		x = self.ff(x)
+		return x
 
-class Decoder(nn.Module):
-
-	def __init__(self,n_header, d_model, d_ff, dropout_rate, vocabulary_size, max_sequence_length, n_layer):
+class DecoderOnly(nn.Module):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_headers):
 		super().__init__()
-		self.emb = nn.Embedding(vocabulary_size, d_model)
-		self.position = nn.Embedding(max_sequence_length, d_model)
-		self.blocks = nn.ModuleList([TransformerBlock(n_header, d_model, d_ff, dropout_rate) for _ in range(n_layer)])
-		self.project = nn.Linear(d_model, vocabulary_size, bias=False)
-        # registered as a buffer to allow it to move
-		self.register_buffer('mask', torch.tril(torch.ones(max_sequence_length, max_sequence_length)))
+		self.ms = max_seq
+		self.emb = nn.Embedding(v_size, d_model)
+		self.pos = nn.Embedding(max_seq, d_model)
+		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_headers) for _ in range(n_blocks)])
+		self.proj = nn.Linear(d_model, v_size)
+		
 
 
 	def forward(self, input_ids):
-
-		batch_size, seq_length = input_ids.size()
-		token_emb = self.emb(input_ids) # b,s,d
-		position_id = torch.arange(0, seq_length, dtype=torch.long, device=input_ids.device).unsqueeze(0) # 1, s
-		position_emb = self.position(position_id) # 1,s,d
-
-		x = token_emb + position_emb
-		
-        # adjust mask size
-		mask = self.mask[:seq_length,:seq_length]
-
+		b, s = input_ids.size()
+		token_emb = self.emb(input_ids)
+		position_ids = torch.arange(0, s, device = input_ids.device).unsqueeze(0) # 1,
+		pos_emb = self.pos(position_ids)
+		x = token_emb + pos_emb
+		mask = torch.tril(torch.ones(s,s, device=input_ids.device))
 		for block in self.blocks:
 			x = block(x, mask)
 
 		# final projection
-		logits = self.project(x) # b,s,v
+		logits = self.proj(x)
 		return logits
+		
+		
