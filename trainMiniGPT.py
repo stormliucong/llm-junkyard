@@ -1,5 +1,7 @@
+import torch
 import torch.optim as optim
-import tqdm
+import torch.nn as nn
+from tqdm import tqdm
 
 
 class Trainer:
@@ -20,11 +22,11 @@ class Trainer:
     for batch_id, (input_ids, target) in enumerate(progress_bar):
 
       # Move to device
-      input_ids.to(self.device)
-      target.to(self.device) # b, s
+      input_ids = input_ids.to(self.device)
+      target = target.to(self.device) # b, s
 
       # Zero gradient
-      self.optim.zero_grads()
+      self.optim.zero_grad()
 
       # Forward Pass
       logits = self.model(input_ids) # b, s, v
@@ -55,8 +57,8 @@ class Trainer:
       
       for batch_id, (input_ids, target) in enumerate(progress_bar):
         # Move to device
-        input_ids.to(self.device)
-        target.to(self.device)
+        input_ids = input_ids.to(self.device)
+        target = target.to(self.device) # b, s
         
         # forward pass
         logits = self.model(input_ids, target)
@@ -68,7 +70,7 @@ class Trainer:
         # set progress bar
         total_loss += loss
         batch_n += 1
-        progress_bar.set_postfix(f"loss: {loss}")
+        progress_bar.set_postfix(f"loss: {loss.item()}")
     return total_loss / batch_n
 
   def train(self, train_dataloader, val_dataloader, epoch_size):
