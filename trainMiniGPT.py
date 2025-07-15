@@ -1,72 +1,84 @@
-import torch.utils.optim as optim
+import torch.optim as optim
 import tqdm
 
 
 class Trainer:
   def __init__(self, model, device, learning_rate = 1e-3):
-    self.train_batch = train_dataloader()
+    self.device = device
     self.model = model
-    self.model.to_device(device)
-    self.optim = optim.AdamW(learning_rate)
+    self.model.to(self.device)
+    self.optim = optim.AdamW(self.model.parameters(), learning_rate)
     self.ce = nn.CrossEntropyLoss()
 
-  def train_epoch(self, train_data, batch_size):
-    batch_train_data = self.batch_train_data
-    progress_bar = tqdm(batch_train_data, batch_size, "trainining")
-
+  def train_epoch(self, train_dataloader):
+    self.model.train()
+    
+    progress_bar = tqdm(train_dataloader, "trainining")
     total_loss = 0
-    for batch_id, (input_ids, target) in progress_bar:
-      batch_size, _ = input_ids.size()
-      input_ids.to_device(device)
-      target.to_device(device) # b, v
-      self.model.train()
-      self.optim.zero_grad()
+    batch_n = 0
+    
+    for batch_id, (input_ids, target) in enumerate(progress_bar):
+
+      # Move to device
+      input_ids.to(self.device)
+      target.to(self.device) # b, s
+
+      # Zero gradient
+      self.optim.zero_grads()
 
       # Forward Pass
-      logits = self.model(input_ids) # b, v
+      logits = self.model(input_ids) # b, s, v
+      
 
       # Calculate Loss
-      loss = self.ce(logits, target)
+      v_size = logitis.size()[-1]
+      loss = self.ce(logits.view(-1, logits.size(-1)) , target.view(-1))
 
       # Backward pass
       loss.backward()
 
-      average_loss = loss / batch_size
-      total_loss += average_loss
-    return total_loss
+      # Model update
+      self.optim.step()
 
-  def val(self,val_data):
+      # set progress bar
+      total_loss += loss
+      batch_n += 1
+      progress_bar.set_postfix(f"loss: {loss}")
+    return total_loss / batch_n
+
+  def val(self,val_dataloader):
     self.model.eval()
-    with torch.zero_grads():
+    with torch.no_grads():
       total_loss = 0
-      progress_bar = tqdm(val_data, batch_size, "validating")
-      for batch_id, (input_ids, target) in tqdm(progress_bar):
-        input_ids.to_device(self.device)
-        target.to_device(self.device)
+      batch_n += 1
+      progress_bar = tqdm(val_dataloader, "validating")
+      
+      for batch_id, (input_ids, target) in enumerate(progress_bar):
+        # Move to device
+        input_ids.to(self.device)
+        target.to(self.device)
         
         # forward pass
         logits = self.model(input_ids, target)
+        
         # cal loss 
-        loss = self.ce(logits, target)
-        average_loss = loss / batch_size
-      total_loss += average_loss
-    return total_loss    
+        v_size = logitis.size()[-1]
+        loss = self.ce(logits.view(-1, logits.size(-1)) , target.view(-1))
 
-  def train(self, train_data, epoch_size):
-      train_data = self.train_data
-      val_data = self.val_data
-      batch_size, _ = train_data.size()
+        # set progress bar
+        total_loss += loss
+        batch_n += 1
+        progress_bar.set_postfix(f"loss: {loss}")
+    return total_loss / batch_n
 
-
-      for epochs in tqdm(range(n_epochs)):
-        batch_train_data = train_data
-        total_loss = self.train_epoch(batch_train_data)
-        print(f"total_loss in training in this epoch is ({total_loss})")
-        batch_val_data = val_data
-        total_loss = self.val_epoch(batch_train_data)
-
-  def save_checkpoints(self):
-    torch.save(self.mode)
+  def train(self, train_dataloader, val_dataloader, epoch_size):
+      
+      for epochs in tqdm(range(epoch_size)):
+        
+        average_train_loss = self.train_epoch(train_dataloader)
+        print(f"total_loss in training in this epoch is ({average_train_loss})")
+        average_val_loss = self.train_epoch(val_dataloader)
+        print(f"total_loss in val in this epoch is ({average_val_loss})")
         
         
       
