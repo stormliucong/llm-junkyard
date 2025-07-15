@@ -11,7 +11,7 @@ class MultiHeaderAttention(nn.Module):
 		self.w_v = nn.Linear(d_model, d_model)
 		self.h = d_model // n_headers
 		self.n = n_headers
-		assert n_headers * self.h == d_model
+		assert n_headers * self.h == d_model, f"d_model ({d_model}) must be divisible by n_headers ({n_headers})"
 
 		self.w_o = nn.Linear(d_model, d_model)
 		
@@ -53,7 +53,7 @@ class FeedForward(nn.Module):
 		residue = x
 		x = self.fn1(x)
 		x = F.relu(x)
-		x = self.drop(x)
+		x = self.dropout(x)
 		x = self.fn2(x)
 		x = self.ln(x + residue)
 		return x
