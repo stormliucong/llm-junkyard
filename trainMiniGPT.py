@@ -15,7 +15,7 @@ class Trainer:
   def train_epoch(self, train_dataloader):
     self.model.train()
     
-    progress_bar = tqdm(train_dataloader, "trainining")
+    progress_bar = tqdm(train_dataloader, "Trainning")
     total_loss = 0
     batch_n = 0
     
@@ -33,7 +33,6 @@ class Trainer:
       
 
       # Calculate Loss
-      v_size = logitis.size()[-1]
       loss = self.ce(logits.view(-1, logits.size(-1)) , target.view(-1))
 
       # Backward pass
@@ -43,17 +42,17 @@ class Trainer:
       self.optim.step()
 
       # set progress bar
-      total_loss += loss
+      total_loss += loss.item()
       batch_n += 1
-      progress_bar.set_postfix(f"loss: {loss}")
+      progress_bar.set_postfix(f"loss: {loss.item():4f}")
     return total_loss / batch_n
 
   def val(self,val_dataloader):
     self.model.eval()
-    with torch.no_grads():
+    with torch.no_grad():
       total_loss = 0
-      batch_n += 1
-      progress_bar = tqdm(val_dataloader, "validating")
+      batch_n = 0
+      progress_bar = tqdm(val_dataloader, "Validating")
       
       for batch_id, (input_ids, target) in enumerate(progress_bar):
         # Move to device
@@ -64,23 +63,22 @@ class Trainer:
         logits = self.model(input_ids, target)
         
         # cal loss 
-        v_size = logitis.size()[-1]
         loss = self.ce(logits.view(-1, logits.size(-1)) , target.view(-1))
 
         # set progress bar
-        total_loss += loss
+        total_loss += loss.item()
         batch_n += 1
-        progress_bar.set_postfix(f"loss: {loss.item()}")
+        progress_bar.set_postfix(f"loss: {loss.item():4f}")
     return total_loss / batch_n
 
   def train(self, train_dataloader, val_dataloader, epoch_size):
       
-      for epochs in tqdm(range(epoch_size)):
+      for epochs in tqdm(range(epoch_size), "Epochs"):
         
         average_train_loss = self.train_epoch(train_dataloader)
-        print(f"total_loss in training in this epoch is ({average_train_loss})")
-        average_val_loss = self.train_epoch(val_dataloader)
-        print(f"total_loss in val in this epoch is ({average_val_loss})")
+        print(f"total_loss in training in this epoch is ({average_train_loss:4f})")
+        average_val_loss = self.val(val_dataloader)
+        print(f"total_loss in val in this epoch is ({average_val_loss:4f})")
         
         
       
