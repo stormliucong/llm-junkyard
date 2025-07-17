@@ -54,9 +54,11 @@ class GPTGenerator():
           break
   
         input_ids = torch.cat([input_ids, next_token], dim=-1)
-  
+
+      input_ids.squeeze
       # decode next code
-    return self.tokenizer.decode(input_ids).squeeze().cpu().tolist()
+      generate_tokens = self.tokenizer.decode(input_ids[0].cpu().tolist())
+    return generate_tokens
 
 
 
