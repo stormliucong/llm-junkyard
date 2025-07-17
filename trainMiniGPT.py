@@ -79,7 +79,20 @@ class Trainer:
         print(f"total_loss in training in this epoch is ({average_train_loss:4f})")
         average_val_loss = self.val(val_dataloader)
         print(f"total_loss in val in this epoch is ({average_val_loss:4f})")
-        
+
+  def save_checkpoint(self, file_path):
+    checkpoint = {
+      "model": self.model.state_dict(),
+      "optim": self.optim.state_dict()
+    }
+    torch.save(checkpoint, file_path)
+    return None
+
+  def load_checkpoint(self,file_path):
+    checkpoint = torch.load(file_path)
+    self.model.load_state_dict(check_point['model'])
+    self.optim.load_state_dict(check_point['optim'])
+    return None
         
       
       
