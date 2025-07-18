@@ -71,38 +71,64 @@ class GPTGenerator():
       new_beams = [(input_ids, 0)]  # (input_ids, score)
       for _ in range(self.max_seq):
         candidates = []
+        finished_beams = []
+        active_beams = []
+        # active beams and finish beams 
         for beam in new_beams:
           input_ids, score = beam
           # Check if the next token is EOS
           if input_ids[0, -1].item() == self.EOS:
             # If EOS, just continue to the next beam
-            candidates.append(beam)
+            finished_beams.append(beam)
             continue
-          output = self.model(input_ids)
+          else:
+            active_beams.append(beam)
+            
+        # Add finished beams to candidates
+        candidates.extend(finished_beams)
+            
+        if active_beams:
+          # Process active beams
+          
+          # batch input_ids
+          input_ids_batch = torch.cat([beam[0] for beam in active_beams], dim=0)  # b, s
+          scores_batch = torch.tensor([beam[1] for beam in active_beams], dtype=torch.float, device=self.device)  # b
+          
+          # forward pass through the model
+          output = self.model(input_ids_batch)  # b, s, v
+          
           # Get the logits and apply temperature
           logits = output[:, -1, :] / self.temperature # b, v
+          
           # Sample from top n tokens
           log_prob = F.log_softmax(logits, dim=-1) # b, v
           top_k_log_prob, top_k_idx = torch.topk(log_prob, self.top_n, dim=-1) # b, top_n
-
-          for i in range(self.top_n):
-            k_idx = top_k_idx[0, i]
-            # Create new beam with the next token
-            candidate_next_token = k_idx.unsqueeze(0).unsqueeze(0)  # Reshape to (1, 1)
-            candidate_score = score + top_k_log_prob[0, i].item()
-            # Create new beam
-            new_beam = (torch.cat([input_ids, candidate_next_token], dim=-1), candidate_score)
+          
+          # Create new beam with 
+          scores_batch = scores_batch.unsqueeze(1) + top_k_log_prob  # b, top_n
+          candidate_next_input_id_batch = top_k_idx.unsqueeze(2)  # b, top_n, 1
+          # Expand is a view operation, so it does not allocate new memory
+          candidate_beam_batch = torch.cat([input_ids_batch.unsqueeze(1).expand(-1, self.top_n, -1), candidate_next_input_id_batch], dim=-1)  # b, top_n, s+1
+  
+          # Flatten the candidates
+          candidate_beam_batch = candidate_beam_batch.view(-1, candidate_beam_batch.size(2))  # (b * top_n, s+1)
+          scores_batch = scores_batch.view(-1)  # (b * top_n)
+          for i in range(candidate_beam_batch.size(0)):
+            new_beam = (candidate_beam_batch[i].unsqueeze(0), scores_batch[i].item())
             candidates.append(new_beam)
         # Keep top k beams
         candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:self.beam_size]
+        
+        # Update new beams for the next iteration
+        new_beams = candidates
         
         # check if all beams are EOS
         if all(beam[0][0, -1].item() == self.EOS for beam in candidates):
           break
       # decode the generated tokens by selecting the best beam
-      input_ids = candidates[0][0]  # Select the best beam 
+      best_input_ids = candidates[0][0]  # Select the best beam 
       # Decode the generated tokens
-      generated_tokens = self.tokenizer.decode(input_ids[0].cpu().tolist())
+      generated_tokens = self.tokenizer.decode(best_input_ids[0].cpu().tolist())
     return generated_tokens
         
         
