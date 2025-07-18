@@ -20,12 +20,19 @@ class GPTGenerator():
     self.model.eval()
     with torch.no_grad():
       assert isinstance(prompt_tokens, str), "prompt tokens should be a string"
-      
-      input_ids = torch.tensor(self.tokenizer.encode(prompt_tokens), dtyple=torch.long, device=self.device)).unsqueeze(0) # add batch dimension
-  
+
+      input_ids = torch.tensor(self.tokenizer.encode(prompt_tokens), dtype=torch.long, device=self.device).unsqueeze(0) # add batch dimension
+      kv_cache = None
       # calculate output
       for _ in range(self.max_seq):
-        output = self.model(input_ids) # 1, s, v
+        if kv_cache is not None:
+          kv_cache = kv_cache.to(self.device)
+        # forward pass through the model
+        if hasattr(self.model, 'forward_with_kv_cache'):
+          output, kv_cache = self.model.forward_with_kv_cache(input_ids, kv_cache=kv_cache)
+        else:
+          # If the model does not support kv_cache, just forward normally
+          output = self.model(input_ids[:, -1, :])
         logits = output[:, -1, :] / self.temperature # 1, v
     
         # sample from top n tokens
@@ -41,7 +48,7 @@ class GPTGenerator():
           sort_value, sort_idx = torch.sort(logits, dim = -1,descending = True)
           cum_sum = torch.cumsum(F.softmax(sort_value, dim = -1), dim = -1)
   
-          sort_mask = cum_sum > top_p
+          sort_mask = cum_sum > self.top_p
           sort_value[sort_mask] = float('-inf')
           logits = torch.full_like(logits, float('-inf'))
           logits.scatter_(-1, sort_idx,sort_value)
@@ -66,7 +73,8 @@ class GPTGenerator():
     with torch.no_grad():
       assert isinstance(prompt_tokens, str), "prompt tokens should be a string"
       
-      input_ids = torch.tensor(self.tokenizer.encode(prompt_tokens), dtype=torch.long, device=self.device).unsqueeze(0) # add batch dimension
+      input_ids = torch.tensor(self.tokenizer.encode(prompt_tokens), dtype=torch.long, device=self.device).unsqueeze(0) # add batch dimension      
+      
       # Initialize beams
       new_beams = [(input_ids, 0)]  # (input_ids, score)
       for _ in range(self.max_seq):
