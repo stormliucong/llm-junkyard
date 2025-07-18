@@ -113,12 +113,15 @@ class GPTGenerator():
           # Flatten the candidates
           candidate_beam_batch = candidate_beam_batch.view(-1, candidate_beam_batch.size(2))  # (b * top_n, s+1)
           scores_batch = scores_batch.view(-1)  # (b * top_n)
+          
+          # Keep top k beams
+          top_k_scores, top_k_indices = torch.topk(scores_batch, self.beam_size, descending=True)  # Get top k scores and indices
+          candidate_beam_batch = candidate_beam_batch[top_k_indices]  # Select top k beams based on indices (beam_size, s+1)
+          
+          # Create new candidates
           for i in range(candidate_beam_batch.size(0)):
-            new_beam = (candidate_beam_batch[i].unsqueeze(0), scores_batch[i].item())
+            new_beam = (candidate_beam_batch[i].unsqueeze(0), top_k_scores[i].item())
             candidates.append(new_beam)
-        # Keep top k beams
-        candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:self.beam_size]
-        
         # Update new beams for the next iteration
         new_beams = candidates
         
