@@ -90,8 +90,8 @@ class Trainer:
 
   def load_checkpoint(self,file_path):
     checkpoint = torch.load(file_path)
-    self.model.load_state_dict(check_point['model'])
-    self.optim.load_state_dict(check_point['optim'])
+    self.model.load_state_dict(checkpoint['model'])
+    self.optim.load_state_dict(checkpoint['optim'])
     return None
         
       
