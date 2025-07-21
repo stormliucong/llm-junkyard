@@ -14,7 +14,14 @@ class MultiHeaderAttention(nn.Module):
 		assert n_heads * self.h == d_model, f"d_model ({d_model}) must be divisible by n_heads ({n_heads})"
 
 		self.w_o = nn.Linear(d_model, d_model)
-		
+		self.__init_weights()
+
+	def __init_weights(self):
+		for name, param in self.named_parameters():
+			if "weight" in name:
+				nn.init.xavier_uniform_(param)
+			elif "bias" in name:
+				nn.init.zeros_(param)
 
 	def forward(self, x, mask=None):
 		b,s,d = x.size()
@@ -98,13 +105,18 @@ class FeedForward(nn.Module):
 		self.dropout = nn.Dropout(drop_out_rate)
 		self.fn2 = nn.Linear(d_ff, d_model)
 		# self.ln = nn.LayerNorm(d_model)
+		self.__init_weights()
+	def __init_weights(self):
+		for name, param in self.named_parameters():
+			if "weight" in name:
+				nn.init.xavier_uniform_(param)
+			elif "bias" in name:
+				nn.init.zeros_(param)
 	def forward(self, x):
-		residue = x
 		x = self.fn1(x)
 		x = F.relu(x)
 		x = self.dropout(x)
 		x = self.fn2(x)
-		# x = self.ln(x + residue)
 		return x
 
 class TransformerBlock(nn.Module):
@@ -114,6 +126,7 @@ class TransformerBlock(nn.Module):
 		self.ln1 = nn.LayerNorm(d_model)
 		self.ln2 = nn.LayerNorm(d_model)
 		self.ff = FeedForward(d_model,d_ff, drop_out_rate)
+    
 	def forward(self, x, mask=None):
 		residue1 = x # pre-layer norm
 		x= self.ln1(x)
@@ -138,16 +151,36 @@ class TransformerBlock(nn.Module):
 		x = x + residue2
 		return x, kv_cache
 
+class SinCosinePositionalEmbedding(nn.Module):
+	def __init__(self, d_model, max_seq_len):
+		super().__init__()
+		self.d_model = d_model
+		self.max_seq_len = max_seq_len
+		self.register_buffer("positional_embedding", self._generate_positional_embedding()) # no parameters, just a buffer
+
+	def _generate_positional_embedding(self):
+		assert self.d_model % 2 == 0, "d_model must be even for SinCosinePositionalEmbedding"
+		position = torch.arange(0, self.max_seq_len).unsqueeze(1)  # (max_seq_len, 1)
+		# w_k = 1/10000^(2k/d) = exp(-log(10000) * 2k / d_model)
+		w_k = torch.exp(-math.log(10000) * 2 * torch.arange(0, self.d_model // 2, dtype=torch.float32) / self.d_model)
+		pos_emb = torch.zeros(self.max_seq_len, self.d_model)
+		pos_emb[:, 0::2] = torch.sin(position * w_k)  # even indices sin(pos * 2i)
+		pos_emb[:, 1::2] = torch.cos(position * w_k)  # odd indices cos(pos * 2i+1)
+		return pos_emb.unsqueeze(0)  # (1, max_seq_len, d_model)
+
+	def forward(self, position_ids):
+		return self.positional_embedding[:, :position_ids.size(1), :]
+
 class DecoderOnly(nn.Module):
-	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False):
 		super().__init__()
 		self.ms = max_seq
 		self.emb = nn.Embedding(v_size, d_model)
-		self.pos = nn.Embedding(max_seq, d_model)
+		self.pos = nn.Embedding(max_seq, d_model) if abs_pos_emb else SinCosinePositionalEmbedding(d_model, max_seq)
 		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
 		self.ln = nn.LayerNorm(d_model)
 		# final projection
-  		self.proj = nn.Linear(d_model, v_size)
+		self.proj = nn.Linear(d_model, v_size)
 
 	def forward(self, input_ids):
 		b, s = input_ids.size()
