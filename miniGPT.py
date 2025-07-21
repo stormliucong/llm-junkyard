@@ -172,7 +172,7 @@ class SinCosinePositionalEmbedding(nn.Module):
 		return self.positional_embedding[:, :position_ids.size(1), :]
 
 class DecoderOnly(nn.Module):
-	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False, weight_tier=False):
 		super().__init__()
 		self.ms = max_seq
 		self.emb = nn.Embedding(v_size, d_model)
@@ -180,7 +180,14 @@ class DecoderOnly(nn.Module):
 		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
 		self.ln = nn.LayerNorm(d_model)
 		# final projection
-		self.proj = nn.Linear(d_model, v_size)
+		if weight_tier:
+			# use original embedding weights for projection
+			self.proj = nn.Linear(d_model, v_size, bias=False)
+			self.proj.weight = self.emb.weight
+
+		else:
+			# standard projection
+			self.proj = nn.Linear(d_model, v_size)
 
 	def forward(self, input_ids):
 		b, s = input_ids.size()
@@ -193,7 +200,7 @@ class DecoderOnly(nn.Module):
 			x = block(x, mask)
 
 		# final layernorm and projection
-		logits = self.ln(self.proj(x))
+		logits = self.proj(self.ln(x))
 		return logits
 
 	def forward_with_kv_cache(self, input_ids, kv_cache=None):
