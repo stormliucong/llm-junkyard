@@ -240,4 +240,29 @@ class DecoderOnly(nn.Module):
 		logits = self.proj(self.ln(x))
 		return logits, kv_cache
 
+class EncoderOnly(nn.Module):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, mask_id=None):
+		super().__init__()
+		self.ms = max_seq
+		self.emb = nn.Embedding(v_size, d_model)
+		self.pos = nn.Embedding(max_seq, d_model)
+		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
+		self.ln = nn.LayerNorm(d_model)
+		self.proj = nn.Linear(d_model, v_size)
+		self.mask_id = mask_id
+  
+	def forward(self, input_ids):
+		b, s = input_ids.size()
+		assert s <= self.ms, f"Input sequence length {s} exceeds maximum sequence length {self.ms}"
+		token_emb = self.emb(input_ids)
+		position_ids = torch.arange(0, s, device=input_ids.device)
+		pos_emb = self.pos(position_ids)
+		x = token_emb + pos_emb
+		mask = (input_ids != self.mask_id).float() # b, s
+		mask = mask.unsqueeze(1).expand(b, s, s)  # b, s, s
+		for block in self.blocks:
+			x = block(x, mask=mask)
+		logits = self.proj(self.ln(x))
+		return logits
+
  
