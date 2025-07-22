@@ -27,6 +27,13 @@ class MultiHeaderAttention(nn.Module):
 		b,s,d = x.size()
 		h = self.h
 		n = self.n
+  
+		if mask is not None:
+			assert mask.dim() == 3, "mask should be a 3D tensor"
+			assert mask.size(0) == b, "mask should have the same batch size as input x"
+			assert mask.size(1) == s, "mask should have the same sequence length as input x"
+			# mask should be square and match the sequence length of input x	
+			assert mask.size(1) == mask.size(2), "mask should be square"
 
 		# linear projection
 		q = self.w_q(x)
@@ -40,8 +47,10 @@ class MultiHeaderAttention(nn.Module):
 
 		# matmul, mask, softmax and qkv
 		qk = torch.matmul(q, k.transpose(-1,-2)) / math.sqrt(h) # b,n,s,s
+
 		if mask is not None:
-			qk.masked_fill_(mask == 0, -1e9)
+			mask = mask.unsqueeze(1)  # b, 1, s, s
+			qk.masked_fill_(mask == 0, -1e9) 
 		qk = F.softmax(qk, dim = -1)
 		qkv = torch.matmul(qk, v) # b,n,s,h
 
@@ -172,13 +181,14 @@ class SinCosinePositionalEmbedding(nn.Module):
 		return self.positional_embedding[:, :position_ids.size(1), :]
 
 class DecoderOnly(nn.Module):
-	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False, weight_tier=False):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False, weight_tier=False, mask_id=None):
 		super().__init__()
 		self.ms = max_seq
 		self.emb = nn.Embedding(v_size, d_model)
 		self.pos = nn.Embedding(max_seq, d_model) if abs_pos_emb else SinCosinePositionalEmbedding(d_model, max_seq)
 		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
 		self.ln = nn.LayerNorm(d_model)
+		self.mask_id = mask_id
 		# final projection
 		if weight_tier:
 			# use original embedding weights for projection
@@ -191,11 +201,15 @@ class DecoderOnly(nn.Module):
 
 	def forward(self, input_ids):
 		b, s = input_ids.size()
+		assert s <= self.ms, f"Input sequence length {s} exceeds maximum sequence length {self.ms}"
 		token_emb = self.emb(input_ids)
 		position_ids = torch.arange(0, s, device = input_ids.device).unsqueeze(0) # 1,
 		pos_emb = self.pos(position_ids)
 		x = token_emb + pos_emb
-		mask = torch.tril(torch.ones(s,s, device=input_ids.device))
+		casual_mask = torch.tril(torch.ones(s,s, device=input_ids.device)) # s, s
+		mask = (input_ids != self.mask_id).float() # b, s
+		mask = mask.unsqueeze(1).expand(b, s, s)  # b, s, s
+		mask = mask & casual_mask.unsqueeze(0)  # b, s, s
 		for block in self.blocks:
 			x = block(x, mask)
 
@@ -206,7 +220,7 @@ class DecoderOnly(nn.Module):
 	def forward_with_kv_cache(self, input_ids, kv_cache=None):
 		
 		b, s = input_ids.size()
-
+		assert s <= self.ms, f"Input sequence length {s} exceeds maximum sequence length {self.ms}"
 		if kv_cache is not None:
 			assert len(kv_cache) == len(self.blocks), "kv_cache should have the same length as blocks"
 			pos_start_idx = kv_cache[0][0].size(2) 
@@ -225,6 +239,32 @@ class DecoderOnly(nn.Module):
 		for i, block in enumerate(self.blocks):
 			x, kv_cache[i] = block.forward_with_kv_cache(x, kv_cache[i])
 		# final layernorm and projection
-		logits = self.ln(self.proj(x))
+		logits = self.proj(self.ln(x))
 		return logits, kv_cache
+
+class EncoderOnly(nn.Module):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, mask_id=None):
+		super().__init__()
+		self.ms = max_seq
+		self.emb = nn.Embedding(v_size, d_model)
+		self.pos = nn.Embedding(max_seq, d_model)
+		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
+		self.ln = nn.LayerNorm(d_model)
+		self.proj = nn.Linear(d_model, v_size)
+		self.mask_id = mask_id
+  
+	def forward(self, input_ids):
+		b, s = input_ids.size()
+		assert s <= self.ms, f"Input sequence length {s} exceeds maximum sequence length {self.ms}"
+		token_emb = self.emb(input_ids)
+		position_ids = torch.arange(0, s, device=input_ids.device)
+		pos_emb = self.pos(position_ids)
+		x = token_emb + pos_emb
+		mask = (input_ids != self.mask_id).float() # b, s
+		mask = mask.unsqueeze(1).expand(b, s, s)  # b, s, s
+		for block in self.blocks:
+			x = block(x, mask=mask)
+		logits = self.proj(self.ln(x))
+		return logits
+ 
  
