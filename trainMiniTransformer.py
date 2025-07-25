@@ -26,9 +26,9 @@ class Trainer:
     def train(self, epochs):
         for epoch in range(epochs):
             self.model.train()
-            progress_bar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch")
+            progress_bar = tqdm(self.train_loader, desc=f"Training Epoch {epoch+1}/{epochs}", unit="batch")
             for batch_idx, batch in enumerate(progress_bar):
-                progress_bar.set_description(f"Epoch {epoch+1}/{epochs} - Batch {batch_idx+1}/{len(self.train_loader)}")
+                progress_bar.set_description(f"Training Epoch {epoch+1}/{epochs} - Batch {batch_idx+1}/{len(self.train_loader)}")
                 inputs, outputs, targets = batch
                 inputs, outputs, targets = inputs.to(self.device), outputs.to(self.device), targets.to(self.device)
                 self.optimizer.zero_grad()
@@ -36,29 +36,31 @@ class Trainer:
                 loss = self.criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
                 loss.backward()
                 self.optimizer.step()
-                if (batch_idx + 1) % 100 == 0:
-                    print(f"Epoch [{epoch+1}/{epochs}], Step [{batch_idx+1}/{len(self.train_loader)}], Loss: {loss.item():.4f}")
-                # collect gc
+                # Update only every 100 steps
+                if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == len(self.train_loader):
+                    
+                    progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+                    progress_bar.update(100)
                 if self.device.type == 'cuda':
                     torch.cuda.empty_cache()
                 elif self.device.type == 'mps':
                     gc.collect()
                     
             self.epoch += 1
-            
-            # self.validate()
+            self.validate()
 
     def validate(self):
         self.model.eval()
         with torch.no_grad():
-            for batch in self.val_loader:
+            progress_bar = tqdm(self.val_loader, desc="Validating", unit="batch")
+            for batch_idx, batch in enumerate(progress_bar):
+                progress_bar.set_description(f"Validating - Batch {batch_idx+1}/{len(self.val_loader)}")
                 inputs, outputs, targets = batch
-                inputs, outputs, targets = inputs.to(self.device), outputs.to(self.device), targets.to(self.device)
-                print(f"inputs: {inputs}, outputs: {outputs}, targets: {targets}")
-                # forward pass
+                inputs, outputs, targets = inputs.to(self.device), outputs.to(self.device), targets.to(self.device)                # forward pass
                 outputs = self.model(inputs, output_ids=targets)
                 loss = self.criterion(outputs.view(-1, outputs.size(-1)), targets.view(-1))
-                print(f"Validation Loss: {loss.item():4f}")
+                progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+                progress_bar.update(1)
                 if loss.item() < self.best_val_loss:
                     self.best_val_loss = loss.item()
                     self.save_model('best_model.pth')
@@ -99,18 +101,22 @@ if __name__ == "__main__":
     learning_rate = 1e-3
     epochs = 10
     v_size = SimpleLetterTokenizer().n_vocab
+    print(f"Vocabulary size: {v_size}")
     start_token_id = v_size + 1
     end_token_id = v_size + 2
     v_size = v_size + 2
+    print(f"Start token ID: {start_token_id}, End token ID: {end_token_id}")
+    print(f"Using vocabulary size: {v_size} (including start and end tokens)")
     # Mac M1 chip
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {device}")
     print(f"load dataset with max_seq: {max_seq}, start_token_id: {start_token_id}, end_token_id: {end_token_id}")
-    dataset = SameSeqDataset(max_seq=max_seq, start_token_id=start_token_id, end_token_id=end_token_id)
+    train_dataset = SameSeqDataset(max_seq=max_seq, start_token_id=start_token_id, end_token_id=end_token_id, train=True)
+    val_dataset = SameSeqDataset(max_seq=max_seq, start_token_id=start_token_id, end_token_id=end_token_id, train=False)
     # dataset = Subset(dataset, [0])  # Use every 10th sample for faster training
-    train_loader = train_datasetloader(dataset, batch_size=batch_size)
-    val_loader = val_datasetloader(dataset, batch_size=batch_size)
+    train_loader = train_datasetloader(train_dataset, batch_size=batch_size)
+    val_loader = val_datasetloader(val_dataset, batch_size=batch_size)
     print(f"load model with v_size: {v_size}, max_seq: {max_seq}, d_model: {d_model}, drop_out_rate: {drop_out_rate}, d_ff: {d_ff}, n_blocks: {n_blocks}, n_heads: {n_heads}")
     print(f"Number of training samples: {len(train_loader.dataset)}")
     print(f"Number of validation samples: {len(val_loader.dataset)}")
@@ -129,3 +135,30 @@ if __name__ == "__main__":
         trainer = Trainer(model, device, train_loader, val_loader, learning_rate)
     print(f"Start training for {epochs} epochs")
     trainer.train(epochs=epochs)
+    print(f"Training completed. Best validation loss: {trainer.best_val_loss:.4f}")
+    
+    # test an example
+    input_seq = "ABC"
+    input_ids = SimpleLetterTokenizer().encode(input_seq)
+    input_ids = input_ids + [0]
+    print(f"Start token ID: {start_token_id}, End token ID: {end_token_id}")
+    # convert to tensor and add batch dimension
+    input_ids = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0).to(device)
+    print(f"Input sequence: {input_seq}, Input IDs: {input_ids}")
+    output_token_ids = model.generate(
+        input_ids=input_ids,
+        max_length=max_seq,
+        start_token_id=start_token_id,
+        end_token_id=end_token_id
+    )
+    
+    output_token_ids = output_token_ids[0].tolist()
+    # remove start token
+    output_token_ids = output_token_ids[1:]  # remove the start token
+    # remove end token if it exists
+    if end_token_id in output_token_ids:
+        output_token_ids = output_token_ids[:output_token_ids.index(end_token_id)]
+
+    output_seq = SimpleLetterTokenizer().decode(output_token_ids)
+    print(f"Input sequence: {input_seq}, Generated sequence: {output_seq}")
+    

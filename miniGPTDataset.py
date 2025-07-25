@@ -84,7 +84,10 @@ class SameSeqDataset(Dataset):
         # tokenize and encode
         
         # content is random sequence of letters for testing.
-        content = ''.join(random.choices(string.ascii_uppercase, k=1000000))  # 1 million characters
+        if train:
+            content = ''.join(random.choices(string.ascii_uppercase, k=1000000))  # 1 million characters for training
+        else:
+            content = ''.join(random.choices(string.ascii_uppercase, k=1000))  # 1K characters for validation
         self.sequences = self.tokenizer.encode(content)
         self.num_seq = len(self.sequences) - self.max_seq - 3
         assert self.num_seq > 0, "Dataset too short for given max_seq"

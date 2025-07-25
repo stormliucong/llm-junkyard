@@ -186,7 +186,6 @@ class Transformer(nn.Module):
         self.pad_idx = pad_idx
         self.encoder = Encoder(v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads)
         self.decoder = Decoder(v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads)
-
     def _create_padding_mask(self, x):
         return (x != self.pad_idx).unsqueeze(1).unsqueeze(2).to(dtype=torch.bool) # dimensions: (batch_size, 1, 1, seq_length)
     
@@ -204,3 +203,29 @@ class Transformer(nn.Module):
         # Pass the encoder output to the decoder
         decoder_output = self.decoder(output_ids, encoder_output=encoder_output, src_mask=src_mask, tgt_mask=tgt_mask)
         return decoder_output
+    
+    def generate(self, input_ids, max_length, start_token_id=None, end_token_id=None):
+        self.eval()
+        src_mask = self._create_padding_mask(input_ids) # b, 1, 1, s
+        encoder_output = self.encoder(input_ids, src_mask)
+        
+        # initialize output_ids with start_token_id
+        output_ids = torch.full((input_ids.size(0), 1), fill_value=start_token_id, dtype=torch.long, device=input_ids.device)
+        
+        # generate tokens one by one
+        for _ in range(max_length):
+            tgt_mask = self._create_causal_mask(output_ids.size(1)) # b, 1, s+1, s+1
+            tgt_mask = tgt_mask.to(output_ids.device)
+            print(f"output_ids: {output_ids}")
+            decoder_output = self.decoder(output_ids, encoder_output=encoder_output, src_mask=src_mask, tgt_mask=tgt_mask)
+            
+            # get the last token's logits
+            next_token_logits = decoder_output[:, -1, :]
+            next_token_id = next_token_logits.argmax(dim=-1, keepdim=True)
+            output_ids = torch.cat([output_ids, next_token_id], dim=1)
+            
+            # stop if end_token_id is generated
+            if (next_token_id == end_token_id).all():
+                break
+            
+        return output_ids    

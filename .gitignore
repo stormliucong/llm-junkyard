@@ -11,10 +11,10 @@ data/
 *.csv
 *.tsv
 *.json
-*.txt
 
 # checkpoints
-checkpoints/*
+checkpoints.*
+checkpoints/
 # models
 *.pth
 
