@@ -178,15 +178,15 @@ class SinCosinePositionalEmbedding(nn.Module):
 	def forward(self, position_ids):
 		return self.positional_embedding[:, :position_ids.size(1), :]
 
-class DecoderOnly(nn.Module):
-	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False, weight_tier=False, mask_id=None):
+class GPT(nn.Module):
+	def __init__(self, v_size, max_seq, d_model, drop_out_rate, d_ff, n_blocks, n_heads, abs_pos_emb=False, weight_tier=False):
 		super().__init__()
 		self.ms = max_seq
 		self.emb = nn.Embedding(v_size, d_model)
 		self.pos = nn.Embedding(max_seq, d_model) if abs_pos_emb else SinCosinePositionalEmbedding(d_model, max_seq)
 		self.blocks = nn.ModuleList([TransformerBlock(d_model, drop_out_rate, d_ff, n_heads) for _ in range(n_blocks)])
 		self.ln = nn.LayerNorm(d_model)
-		self.mask_id = mask_id
+  
 		# final projection
 		if weight_tier:
 			# use original embedding weights for projection
@@ -205,11 +205,10 @@ class DecoderOnly(nn.Module):
 		pos_emb = self.pos(position_ids)
 		x = token_emb + pos_emb
 		casual_mask = torch.tril(torch.ones(s,s, device=input_ids.device)) # s, s
-		mask = (input_ids != self.mask_id).float() # b, s
-		mask = mask.unsqueeze(1).expand(b, s, s)  # b, s, s
-		mask = mask & casual_mask.unsqueeze(0)  # b, s, s
+		padding_mask = (input_ids != 0).unsqueeze(1)  # b, 1, s
+		mask = casual_mask * padding_mask  # b, s, s
 		for block in self.blocks:
-			x = block(x, mask)
+			x = block(x, mask=mask)
 
 		# final layernorm and projection
 		logits = self.proj(self.ln(x))

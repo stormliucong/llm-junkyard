@@ -63,27 +63,6 @@ class SameSeqDataset(Dataset):
         self.max_seq = max_seq
         # self.tokenizer = tiktoken.get_encoding("gpt2")
         self.tokenizer = SimpleLetterTokenizer()
-        # if os.path.exists("t8.shakespeare.txt"):
-        #     # if the file exists, read from it
-        #     with open("t8.shakespeare.txt", "r") as f:
-        #         content = f.read()
-        # else:
-        #     shakespear_content_url = "https://ocw.mit.edu/ans7870/6/6.006/s08/lecturenotes/files/t8.shakespeare.txt"
-        #     # read the content from the URL
-        #     content = requests.get(shakespear_content_url).text
-            
-        #     # save to content to local file
-        #     with open("t8.shakespeare.txt", "w") as f:
-        #         f.write(content)
-                
-        # # subset the content for testing purposes.
-        # if train:
-        #     content = content[:10000] # 10k
-        # else:
-        #     content = content[10000:10000 + 1000]  # 1k characters for validation
-        # tokenize and encode
-        
-        # content is random sequence of letters for testing.
         if train:
             content = ''.join(random.choices(string.ascii_uppercase, k=1000000))  # 1 million characters for training
         else:
@@ -113,6 +92,52 @@ class SameSeqDataset(Dataset):
             target.extend([0] * (self.max_seq - len(target)))
 
         return torch.tensor(input_ids, dtype=torch.long), torch.tensor(output, dtype=torch.long), torch.tensor(target, dtype=torch.long)
+      
+class ShakespeareGPTDataset(Dataset):
+    # For training GPT based transformer model.
+    def __init__(self, max_seq=512, start_token_id=None, end_token_id=None, train=True):
+        self.max_seq = max_seq
+        self.tokenizer = tiktoken.get_encoding("gpt2")
+        if os.path.exists("data/t8.shakespeare.txt"):
+            # if the file exists, read from it
+            with open("data/t8.shakespeare.txt", "r") as f:
+                content = f.read()
+        else:
+            shakespear_content_url = "https://ocw.mit.edu/ans7870/6/6.006/s08/lecturenotes/files/t8.shakespeare.txt"
+            # read the content from the URL
+            content = requests.get(shakespear_content_url).text
+            # save to content to local file
+            with open("data/t8.shakespeare.txt", "w") as f:
+                f.write(content)
+        # content is random sequence of letters for testing.
+        if train:
+            content = content[:1000000]  # 1 million characters for training
+            
+        else:
+            content = content[1000000:1000000 + 10000]  # 10K characters for validation
+        self.sequences = self.tokenizer.encode(content)
+        self.num_seq = len(self.sequences) - self.max_seq - 1
+        assert self.num_seq > 0, "Dataset too short for given max_seq"
+        self.start_token = start_token_id  
+        self.end_token = end_token_id 
+        
+    def __len__(self):
+        return self.num_seq 
+
+    def __getitem__(self, idx):
+        
+        # input = [1,2,3]
+        # target = [3,2,1,-200]
+        input_ids = self.sequences[idx : idx + self.max_seq - 1]
+        target = self.sequences[idx + 1 : idx + self.max_seq]
+
+        # add padding only occur when num_seq = 0.
+        if len(input_ids) < self.max_seq:
+            input_ids.extend([0] * (self.max_seq - len(input_ids)))
+            target.extend([0] * (self.max_seq - len(target)))
+
+        return torch.tensor(input_ids, dtype=torch.long), torch.tensor(target, dtype=torch.long)
+
 
 def train_datasetloader(dataset, batch_size=BATCH_SIZE):
     return DataLoader(

@@ -1,7 +1,12 @@
+from miniGPTDataset import ShakespeareGPTDataset, train_datasetloader, val_datasetloader
+from miniGPT import GPT
 import torch
 import torch.optim as optim
 import torch.nn as nn
 from tqdm import tqdm
+import gc
+import os
+
 
 
 class Trainer:
@@ -12,7 +17,11 @@ class Trainer:
     self.gradient_accumulation_steps = gradient_accumulation_steps
     # model, optimizer, scheduler
     self.model = model.to(self.device)
-    self.optim = optim.AdamW(self.model.parameters(), learning_rate=learning_rate, weight_decay=weight_decay)
+    if device == 'cuda':
+      self.model = torch.compile(self.model, mode="reduce-overhead") # Only apply this if model is compute-heavy and stable
+      
+      
+    self.optim = optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     # learning rate scheduler with warmup + cosine decay
     self.scheduler = self._get_scheduler(warmup_steps, max_steps)
     self.ce = nn.CrossEntropyLoss(ignore_index=-100)  # ignore padding index in loss calculation
@@ -55,7 +64,7 @@ class Trainer:
       loss = self.ce(logits.view(-1, logits.size(-1)) , target.view(-1))
       
       # Scale loss to avoid overflow
-      loss = loss / self.gradient_accumulation_steps if self.gradient_accumulation_steps is not None
+      loss = loss / self.gradient_accumulation_steps if self.gradient_accumulation_steps is not None else loss
 
       # Backward pass
       loss.backward()
@@ -75,7 +84,7 @@ class Trainer:
       # set progress bar
       total_loss += loss.item() * self.gradient_accumulation_steps
       batch_n += 1
-      progress_bar.set_postfix(f"loss: {loss.item():4f}, lr: {self.scheduler.get_last_lr()[0]:.6f}, step: {self.global_step}")
+      progress_bar.set_postfix(f"loss: {loss.item():4f}, step: {self.global_step}")
     return total_loss / batch_n if batch_n > 0 else 0
 
   def val(self,val_dataloader):
@@ -114,10 +123,9 @@ class Trainer:
         if average_val_loss < self.best_val_loss:
           self.best_val_loss = average_val_loss
           print(f"New best model saved with loss: {self.best_val_loss:4f}")
+          self.save_checkpoint(os.path.join(self.save_dir, f"best_model_epoch_{self.epoch}.pt"))
           
-        # Save checkpoint
-        if self.epoch % 5 == 0 or self.epoch == epoch_size - 1:
-          self.save_checkpoint(f"{self.save_dir}/checkpoint_epoch_{self.epoch}.pt")
+      
         
   def save_checkpoint(self, file_path):
     checkpoint = {
@@ -141,6 +149,65 @@ class Trainer:
     self.best_val_loss = checkpoint["best_val_loss"]
     print(f"Checkpoint loaded from {file_path}, epoch: {self.epoch}, global_step: {self.global_step}, best_val_loss: {self.best_val_loss:4f}")
     return None
+  
+if __name__ == "__main__":
+    # mps
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else device)
+    print(f"Using device: {device}")
+    
+    # parameters
+    max_seq = 32
+    d_model = 128
+    n_heads = 2
+    n_blocks = 2
+    d_ff = 256
+    drop_out_rate = 0.1
+    abs_pos_emb = True  # Use absolute positional embedding
+    weight_tier = True  # Use standard projection, not weight tiering
+    # training parameters
+    batch_size = 2
+    learning_rate = 1e-3
+    weight_decay = 0.01
+    warmup_steps = 1000
+    max_steps = 10000
+    gradient_accumulation_steps = 64
+    grad_clip = 1.0
+    save_dir = "./checkpoints"
+
+    train_dataset = ShakespeareGPTDataset(max_seq=max_seq, train=True)
+    val_dataset = ShakespeareGPTDataset(max_seq=max_seq, train=False)
+
+    train_datasetloader = train_datasetloader(train_dataset, batch_size=batch_size)
+    val_datasetloader = val_datasetloader(val_dataset, batch_size=batch_size)
+    
+    model = GPT(
+        v_size=train_dataset.tokenizer.n_vocab,
+        max_seq=max_seq,
+        d_model=d_model,
+        drop_out_rate=drop_out_rate,
+        d_ff=d_ff,
+        n_blocks=n_blocks,
+        n_heads=n_heads,
+        abs_pos_emb=abs_pos_emb,  # Use absolute positional embedding
+        weight_tier=weight_tier  # Use standard projection
+    )
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+    trainer = Trainer(
+        model=model,
+        device=device,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        warmup_steps=warmup_steps,
+        max_steps=max_steps,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        grad_clip=grad_clip,
+        save_dir=save_dir
+    )
+    print(f"Training with {len(train_datasetloader.dataset)} training samples and {len(val_datasetloader.dataset)} validation samples")
+    print(f"Starting training for {max_steps} steps")
+    trainer.train(train_datasetloader, val_datasetloader, epoch_size=10)
+    print(f"Training completed. Best validation loss: {trainer.best_val_loss:.4f}")    
         
       
       
